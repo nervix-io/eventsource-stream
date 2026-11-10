@@ -268,7 +268,7 @@ where
                     } else {
                         *this.state = EventStreamState::Started;
                         if is_bom(string.chars().next().unwrap()) {
-                            &string[1..]
+                            &string['\u{feff}'.len_utf8()..]
                         } else {
                             &string
                         }
@@ -559,5 +559,43 @@ data: test
                 },
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod bom_regression {
+    use super::*;
+    use futures::{stream, FutureExt as _, StreamExt as _};
+
+    fn assert_one_event(chunks: &[&[u8]]) {
+        let input = stream::iter(chunks.iter().map(|chunk| Ok::<_, ()>(*chunk)));
+        let mut events = Box::pin(EventStream::new(input));
+        assert_eq!(
+            events.next().now_or_never(),
+            Some(Some(Ok(Event {
+                event: "message".to_owned(),
+                data: "hello".to_owned(),
+                ..Default::default()
+            })))
+        );
+        assert_eq!(events.next().now_or_never(), Some(None));
+    }
+
+    #[test]
+    fn a_leading_utf8_bom_is_one_complete_character() {
+        assert_one_event(&[b"\xef\xbb\xbfdata: hello\n\n"]);
+    }
+
+    #[test]
+    fn a_leading_utf8_bom_can_span_transport_chunks() {
+        let input = b"\xef\xbb\xbfdata: hello\n\n";
+        for split in 1..=3 {
+            assert_one_event(&[&input[..split], &input[split..]]);
+        }
+    }
+
+    #[test]
+    fn empty_transport_chunks_do_not_consume_the_initial_bom() {
+        assert_one_event(&[b"", b"\xef", b"", b"\xbb\xbf", b"data: hello\n\n"]);
     }
 }
